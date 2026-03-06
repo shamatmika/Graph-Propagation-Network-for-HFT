@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LiqFlow — Spatio-Temporal Tensor Graph</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;500;700&display=swap');
+
+  :root {
+    --bg: #030a0f;
+    --panel: #071420;
+    --border: #0d2a3f;
+    --accent: #00d4ff;
+    --accent2: #ff6b35;
+    --accent3: #39ff14;
+    --node-bid: #00d4ff;
+    --node-ask: #ff6b35;
+    --edge-spatial: rgba(0,212,255,0.35);
+    --edge-temporal: rgba(255,107,53,0.45);
+    --text: #a8c8d8;
+    --text-bright: #e0f4ff;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 300;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,212,255,0.015) 2px,
+      rgba(0,212,255,0.015) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  header {
+    padding: 24px 32px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 20px;
+  }
+
+  header h1 {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 1.3rem;
+    color: var(--accent);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  header span {
+    font-size: 0.85rem;
+    color: #4a7a90;
+    font-family: 'Share Tech Mono', monospace;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 260px 1fr 240px;
+    gap: 0;
+    height: calc(100vh - 70px);
+  }
+
+  .sidebar {
+    border-right: 1px solid var(--border);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    overflow-y: auto;
+  }
+
+  .panel-title {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.65rem;
+    color: #4a7a90;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  .control-group { display: flex; flex-direction: column; gap: 8px; }
+
+  .control-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.82rem;
+    color: var(--text);
+  }
+
+  input[type=range] {
+    width: 120px;
+    accent-color: var(--accent);
+    height: 3px;
+  }
+
+  .val-badge {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--accent);
+    min-width: 32px;
+    text-align: right;
+  }
+
+  .toggle-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.82rem;
+    padding: 5px 0;
+  }
+
+  .toggle {
+    width: 34px; height: 18px;
+    background: #0d2a3f;
+    border-radius: 9px;
+    position: relative;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    transition: background 0.2s;
+  }
+  .toggle.on { background: var(--accent); }
+  .toggle::after {
+    content: '';
+    position: absolute;
+    width: 12px; height: 12px;
+    background: #fff;
+    border-radius: 50%;
+    top: 2px; left: 2px;
+    transition: left 0.2s;
+  }
+  .toggle.on::after { left: 18px; }
+
+  .stat-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+  }
+
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(13,42,63,0.6);
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-val {
+    font-family: 'Share Tech Mono', monospace;
+    color: var(--accent);
+    font-size: 0.78rem;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    padding: 3px 0;
+  }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .legend-line {
+    width: 24px; height: 2px;
+    flex-shrink: 0;
+  }
+
+  /* Main canvas area */
+  .canvas-area {
+    position: relative;
+    background:
+      radial-gradient(ellipse at 30% 40%, rgba(0,212,255,0.04) 0%, transparent 60%),
+      radial-gradient(ellipse at 70% 70%, rgba(255,107,53,0.03) 0%, transparent 55%),
+      var(--bg);
+    overflow: hidden;
+  }
+
+  canvas#graph {
+    display: block;
+    cursor: grab;
+  }
+  canvas#graph:active { cursor: grabbing; }
+
+  .mode-bar {
+    position: absolute;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 2px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px;
+  }
+
+  .mode-btn {
+    padding: 5px 14px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    background: transparent;
+    color: #4a7a90;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .mode-btn.active {
+    background: var(--accent);
+    color: #000;
+  }
+
+  /* Right info panel */
+  .info-panel {
+    border-left: 1px solid var(--border);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    overflow-y: auto;
+  }
+
+  .node-inspector {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+    min-height: 120px;
+  }
+
+  .inspector-hint {
+    color: #2a5a70;
+    font-size: 0.78rem;
+    font-style: italic;
+    margin-top: 8px;
+  }
+
+  .node-detail-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(13,42,63,0.5);
+  }
+  .node-detail-row:last-child { border-bottom: none; }
+  .node-detail-val {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.75rem;
+  }
+
+  .diff-bar-container {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+  }
+
+  .diff-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 5px 0;
+    font-size: 0.76rem;
+  }
+  .diff-bar-label { width: 70px; color: #5a8a9a; font-size: 0.72rem; }
+  .diff-bar-track {
+    flex: 1;
+    height: 6px;
+    background: #071420;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .diff-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.4s ease;
+  }
+  .diff-bar-num {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--accent);
+    width: 40px;
+    text-align: right;
+  }
+
+  .phi-flow {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+  }
+
+  #phiCanvas {
+    display: block;
+    border-radius: 3px;
+    margin-top: 8px;
+  }
+
+  .status-bar {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 28px;
+    background: rgba(7,20,32,0.9);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 20px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.65rem;
+    color: #2a5a70;
+  }
+  .status-bar span { color: var(--accent); }
+
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⬡ LiqFlow — Tensor Graph</h1>
+  <span>GPN · Spatio-Temporal LOB · W=5 · P=10</span>
+</header>
+
+<div class="layout">
+
+  <!-- LEFT SIDEBAR -->
+  <div class="sidebar">
+    <div>
+      <div class="panel-title">Graph Controls</div>
+      <div class="control-group">
+        <div class="control-row">
+          <span>Time Window (W)</span>
+          <input type="range" id="wSlider" min="1" max="10" value="5">
+          <span class="val-badge" id="wVal">5</span>
+        </div>
+        <div class="control-row">
+          <span>Price Levels (P)</span>
+          <input type="range" id="pSlider" min="3" max="10" value="10">
+          <span class="val-badge" id="pVal">10</span>
+        </div>
+        <div class="control-row">
+          <span>Spatial ε</span>
+          <input type="range" id="epsSlider" min="1" max="5" value="2" step="0.5">
+          <span class="val-badge" id="epsVal">2.0</span>
+        </div>
+        <div class="control-row">
+          <span>Node size</span>
+          <input type="range" id="sizeSlider" min="4" max="16" value="8">
+          <span class="val-badge" id="sizeVal">8</span>
+        </div>
+        <div class="control-row">
+          <span>D (diffusivity)</span>
+          <input type="range" id="dSlider" min="0.05" max="0.5" value="0.225" step="0.005">
+          <span class="val-badge" id="dVal">0.23</span>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-title">Visibility</div>
+      <div class="toggle-row"><span>Spatial edges</span><div class="toggle on" id="togSpatial"></div></div>
+      <div class="toggle-row"><span>Temporal edges</span><div class="toggle on" id="togTemporal"></div></div>
+      <div class="toggle-row"><span>Node labels</span><div class="toggle" id="togLabels"></div></div>
+      <div class="toggle-row"><span>φ heatmap</span><div class="toggle on" id="togHeat"></div></div>
+      <div class="toggle-row"><span>Flow animation</span><div class="toggle on" id="togAnim"></div></div>
+      <div class="toggle-row"><span>Bid/Ask split</span><div class="toggle on" id="togSplit"></div></div>
+    </div>
+
+    <div>
+      <div class="panel-title">Legend</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-bid)"></div>Bid node</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-ask)"></div>Ask node</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#888"></div>Mid node</div>
+      <div class="legend-item"><div class="legend-line" style="background:rgba(0,212,255,0.6)"></div>Spatial edge</div>
+      <div class="legend-item"><div class="legend-line" style="background:rgba(255,107,53,0.6)"></div>Temporal edge</div>
+      <div class="legend-item"><div class="legend-line" style="background:rgba(57,255,20,0.5); border-top: 2px dashed rgba(57,255,20,0.5);"></div>Active flow</div>
+    </div>
+
+    <div class="stat-card">
+      <div class="panel-title">Graph Stats</div>
+      <div class="stat-row"><span>Nodes (W×P)</span><span class="stat-val" id="statNodes">50</span></div>
+      <div class="stat-row"><span>Spatial edges</span><span class="stat-val" id="statSpatial">90</span></div>
+      <div class="stat-row"><span>Temporal edges</span><span class="stat-val" id="statTemporal">40</span></div>
+      <div class="stat-row"><span>Total edges</span><span class="stat-val" id="statTotal">130</span></div>
+      <div class="stat-row"><span>Avg degree</span><span class="stat-val" id="statDeg">2.60</span></div>
+      <div class="stat-row"><span>Density</span><span class="stat-val" id="statDens">5.2%</span></div>
+    </div>
+  </div>
+
+  <!-- MAIN CANVAS -->
+  <div class="canvas-area" id="canvasWrap">
+    <canvas id="graph"></canvas>
+    <div class="mode-bar">
+      <button class="mode-btn active" id="btnGrid">GRID</button>
+      <button class="mode-btn" id="btnForce">FORCE</button>
+      <button class="mode-btn" id="btnMatrix">MATRIX</button>
+    </div>
+    <div class="status-bar">
+      <span id="stMode">MODE: GRID</span>
+      &nbsp;|&nbsp; Hover node for details
+      &nbsp;|&nbsp; Drag to pan
+      &nbsp;|&nbsp; Scroll to zoom
+      &nbsp;|&nbsp; <span id="stHover">—</span>
+    </div>
+  </div>
+
+  <!-- RIGHT INFO PANEL -->
+  <div class="info-panel">
+    <div>
+      <div class="panel-title">Node Inspector</div>
+      <div class="node-inspector" id="inspector">
+        <div class="inspector-hint">Hover over a node to inspect its features.</div>
+      </div>
+    </div>
+
+    <div class="diff-bar-container">
+      <div class="panel-title">Learned D Convergence</div>
+      <div class="diff-bar-row">
+        <div class="diff-bar-label">Init D</div>
+        <div class="diff-bar-track"><div class="diff-bar-fill" style="width:20%;background:#4a7a90"></div></div>
+        <div class="diff-bar-num">0.10</div>
+      </div>
+      <div class="diff-bar-row">
+        <div class="diff-bar-label">Ep 10</div>
+        <div class="diff-bar-track"><div class="diff-bar-fill" style="width:52.7%;background:#0099bb"></div></div>
+        <div class="diff-bar-num">0.264</div>
+      </div>
+      <div class="diff-bar-row">
+        <div class="diff-bar-label">Ep 50</div>
+        <div class="diff-bar-track"><div class="diff-bar-fill" style="width:48.1%;background:#00c4dd"></div></div>
+        <div class="diff-bar-num">0.241</div>
+      </div>
+      <div class="diff-bar-row">
+        <div class="diff-bar-label">Final D</div>
+        <div class="diff-bar-track"><div class="diff-bar-fill" style="width:45%;background:var(--accent)"></div></div>
+        <div class="diff-bar-num">0.225</div>
+      </div>
+    </div>
+
+    <div class="phi-flow">
+      <div class="panel-title">φ Liquidity Field (t-slice)</div>
+      <canvas id="phiCanvas" width="198" height="100"></canvas>
+    </div>
+
+    <div class="stat-card">
+      <div class="panel-title">Model Δ (Physics − Baseline)</div>
+      <div class="stat-row"><span>ΔMSE</span><span class="stat-val" style="color:#39ff14">−0.00553</span></div>
+      <div class="stat-row"><span>Δgrad var</span><span class="stat-val" style="color:#39ff14">−0.00216</span></div>
+      <div class="stat-row"><span>Δshock rec</span><span class="stat-val" style="color:#39ff14">−0.00751</span></div>
+      <div class="stat-row"><span>Δovershoot</span><span class="stat-val" style="color:#39ff14">−0.00796</span></div>
+      <div class="stat-row"><span>Δstability</span><span class="stat-val" style="color:#39ff14">−0.04648</span></div>
+      <div class="stat-row"><span>ΔVol MSE</span><span class="stat-val" style="color:var(--accent2)">+0.00732</span></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+const state = {
+  W: 5, P: 10, eps: 2.0, nodeSize: 8, D: 0.225,
+  showSpatial: true, showTemporal: true, showLabels: false,
+  showHeat: true, showAnim: true, showSplit: true,
+  mode: 'grid',
+  pan: { x: 0, y: 0 }, zoom: 1,
+  dragging: false, dragStart: { x: 0, y: 0 }, panStart: { x: 0, y: 0 },
+  hoveredNode: null,
+  animOffset: 0,
+  forcePositions: null,
+};
+
+// Price levels from experiment
+const PRICE_LEVELS = [97.5,98,98.5,99,99.5,100.5,101,101.5,102,102.5];
+const MID = 100.0;
+
+// Synthetic volumes & imbalances per node (seeded pseudo-random)
+function seededRand(seed) {
+  let s = seed;
+  return () => { s = (s * 1664525 + 1013904223) & 0xffffffff; return (s >>> 0) / 4294967296; };
+}
+
+function buildGraph() {
+  const r = seededRand(42);
+  const nodes = [];
+  for (let t = 0; t < state.W; t++) {
+    for (let p = 0; p < state.P; p++) {
+      const price = PRICE_LEVELS[p] || (97.5 + p * 0.5);
+      const vol = 50 + r() * 400;
+      const imb = (r() - 0.5) * 0.6;
+      const isBid = price <= MID;
+      const isAsk = price > MID;
+      nodes.push({ t, p, price, vol, imb, isBid, isAsk, id: t * state.P + p });
+    }
+  }
+
+  const edges = [];
+  // Spatial edges within each time slice
+  for (let t = 0; t < state.W; t++) {
+    for (let p = 0; p < state.P; p++) {
+      for (let q = p + 1; q < state.P; q++) {
+        const dp = Math.abs(PRICE_LEVELS[p] - PRICE_LEVELS[q]);
+        if (dp <= state.eps) {
+          edges.push({ src: t*state.P+p, dst: t*state.P+q, type: 'spatial', strength: 1-dp/state.eps });
+        }
+      }
+    }
+  }
+  // Temporal edges
+  for (let t = 0; t < state.W - 1; t++) {
+    for (let p = 0; p < state.P; p++) {
+      edges.push({ src: t*state.P+p, dst: (t+1)*state.P+p, type: 'temporal', strength: 1.0 });
+    }
+  }
+
+  return { nodes, edges };
+}
+
+// ─── Canvas setup ─────────────────────────────────────────────────────────────
+const wrap = document.getElementById('canvasWrap');
+const canvas = document.getElementById('graph');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+  canvas.width = wrap.clientWidth;
+  canvas.height = wrap.clientHeight - 28;
+}
+resize();
+window.addEventListener('resize', () => { resize(); computeForceLayout(); draw(); });
+
+// ─── Layout ───────────────────────────────────────────────────────────────────
+function gridPos(node) {
+  const W = state.W, P = state.P;
+  const marginX = 80, marginY = 60;
+  const w = canvas.width - marginX*2;
+  const h = canvas.height - marginY*2;
+  const x = marginX + (node.t / Math.max(W-1,1)) * w;
+  const y = marginY + (node.p / Math.max(P-1,1)) * h;
+  return { x, y };
+}
+
+function computeForceLayout() {
+  const { nodes, edges } = buildGraph();
+  const N = nodes.length;
+  const cx = canvas.width / 2, cy = canvas.height / 2;
+  const r = seededRand(7);
+  const pos = nodes.map(() => ({
+    x: cx + (r()-0.5)*canvas.width*0.6,
+    y: cy + (r()-0.5)*canvas.height*0.6,
+    vx: 0, vy: 0
+  }));
+
+  for (let iter = 0; iter < 200; iter++) {
+    // Repulsion
+    for (let i = 0; i < N; i++) for (let j = i+1; j < N; j++) {
+      const dx = pos[i].x - pos[j].x, dy = pos[i].y - pos[j].y;
+      const d2 = dx*dx + dy*dy + 1;
+      const f = 1200 / d2;
+      pos[i].vx += f*dx; pos[i].vy += f*dy;
+      pos[j].vx -= f*dx; pos[j].vy -= f*dy;
+    }
+    // Attraction
+    for (const e of edges) {
+      const dx = pos[e.dst].x - pos[e.src].x, dy = pos[e.dst].y - pos[e.src].y;
+      const d = Math.sqrt(dx*dx+dy*dy)+0.01;
+      const target = e.type==='spatial' ? 60 : 80;
+      const f = (d - target) * 0.04;
+      pos[e.src].vx += f*dx/d; pos[e.src].vy += f*dy/d;
+      pos[e.dst].vx -= f*dx/d; pos[e.dst].vy -= f*dy/d;
+    }
+    // Center pull
+    for (const p of pos) {
+      p.vx += (cx - p.x)*0.002; p.vy += (cy - p.y)*0.002;
+      p.x += p.vx*0.3; p.y += p.vy*0.3;
+      p.vx *= 0.7; p.vy *= 0.7;
+    }
+  }
+  state.forcePositions = pos;
+}
+computeForceLayout();
+
+// ─── φ heatmap canvas ────────────────────────────────────────────────────────
+const phiCanvas = document.getElementById('phiCanvas');
+const phiCtx = phiCanvas.getContext('2d');
+
+function drawPhiField() {
+  const W = state.W, P = state.P;
+  const cw = phiCanvas.width, ch = phiCanvas.height;
+  phiCtx.clearRect(0,0,cw,ch);
+  const cellW = cw/W, cellH = ch/P;
+  const r = seededRand(99);
+  for (let t = 0; t < W; t++) for (let p = 0; p < P; p++) {
+    // φ = diffusion-inspired pseudo value
+    const phi = 0.2 + 0.6*Math.exp(-Math.pow((t/W-0.5)*2 + (p/P-0.5)*1.5, 2)/state.D);
+    const v = Math.floor(phi*255);
+    const rr = Math.floor(0*phi + 0*(1-phi));
+    const gg = Math.floor(212*phi);
+    const bb = Math.floor(255*phi);
+    phiCtx.fillStyle = `rgb(${rr},${gg},${bb})`;
+    phiCtx.fillRect(t*cellW, p*cellH, cellW+0.5, cellH+0.5);
+  }
+  // axis labels
+  phiCtx.fillStyle = 'rgba(168,200,216,0.5)';
+  phiCtx.font = '8px Share Tech Mono, monospace';
+  phiCtx.fillText('t →', cw-22, ch-3);
+  phiCtx.save();
+  phiCtx.translate(6, ch-22);
+  phiCtx.rotate(-Math.PI/2);
+  phiCtx.fillText('p →', 0, 0);
+  phiCtx.restore();
+}
+drawPhiField();
+
+// ─── Matrix view ──────────────────────────────────────────────────────────────
+function drawMatrix(graph) {
+  const N = graph.nodes.length;
+  const size = Math.min(canvas.width, canvas.height) - 80;
+  const cell = Math.min(size / N, 12);
+  const ox = (canvas.width - cell*N) / 2;
+  const oy = (canvas.height - cell*N) / 2;
+
+  ctx.fillStyle = 'rgba(7,20,32,0.9)';
+  ctx.fillRect(ox-10, oy-10, cell*N+20, cell*N+20);
+
+  // adjacency
+  const adj = Array.from({length:N}, ()=>new Float32Array(N));
+  for (const e of graph.edges) { adj[e.src][e.dst] = e.type==='spatial'?1:2; adj[e.dst][e.src]=adj[e.src][e.dst]; }
+
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const v = adj[i][j];
+    if (v === 0) {
+      ctx.fillStyle = i===j ? 'rgba(0,212,255,0.15)' : 'rgba(13,42,63,0.4)';
+    } else if (v === 1) {
+      ctx.fillStyle = 'rgba(0,212,255,0.85)';
+    } else {
+      ctx.fillStyle = 'rgba(255,107,53,0.85)';
+    }
+    ctx.fillRect(ox+j*cell, oy+i*cell, cell-0.5, cell-0.5);
+  }
+
+  // Labels every P
+  ctx.fillStyle = 'rgba(168,200,216,0.5)';
+  ctx.font = '9px Share Tech Mono, monospace';
+  for (let t = 0; t < state.W; t++) {
+    ctx.fillText('t'+t, ox + t*state.P*cell + 1, oy - 3);
+  }
+
+  ctx.fillStyle = '#4a7a90';
+  ctx.font = '11px Rajdhani, sans-serif';
+  ctx.fillText('Adjacency Matrix — cyan=spatial  orange=temporal', ox, oy + cell*N + 18);
+}
+
+// ─── Main draw ────────────────────────────────────────────────────────────────
+function getNodePos(node) {
+  if (state.mode === 'grid') return gridPos(node);
+  if (state.mode === 'force' && state.forcePositions) return state.forcePositions[node.id];
+  return gridPos(node);
+}
+
+function worldToScreen(x, y) {
+  return { x: x * state.zoom + state.pan.x, y: y * state.zoom + state.pan.y };
+}
+function screenToWorld(x, y) {
+  return { x: (x - state.pan.x) / state.zoom, y: (y - state.pan.y) / state.zoom };
+}
+
+function nodeColor(node) {
+  if (!state.showSplit) return '#00d4ff';
+  if (node.price < MID) return `rgba(0,${140+Math.floor(node.vol/3)},255,0.9)`;
+  if (node.price > MID) return `rgba(255,${80+Math.floor(node.vol/5)},53,0.9)`;
+  return '#aaa';
+}
+
+function nodeRadius(node) {
+  const base = state.nodeSize;
+  return base * (0.6 + 0.7*(node.vol/450));
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Grid background
+  ctx.strokeStyle = 'rgba(13,42,63,0.4)';
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x < canvas.width; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
+  for (let y = 0; y < canvas.height; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+
+  const graph = buildGraph();
+
+  if (state.mode === 'matrix') { drawMatrix(graph); return; }
+
+  ctx.save();
+  ctx.translate(state.pan.x, state.pan.y);
+  ctx.scale(state.zoom, state.zoom);
+
+  // φ heatmap overlay
+  if (state.showHeat && state.mode === 'grid') {
+    const W = state.W, P = state.P;
+    for (const node of graph.nodes) {
+      const pos = getNodePos(node);
+      const phi = 0.2 + 0.6*Math.exp(-Math.pow(((node.t/W-0.5)*2+(node.p/P-0.5)*1.5),2)/state.D);
+      ctx.fillStyle = `rgba(0,${Math.floor(212*phi)},${Math.floor(255*phi)},${0.06+phi*0.07})`;
+      const cellW = (canvas.width-160)/Math.max(W-1,1);
+      const cellH = (canvas.height-148)/Math.max(P-1,1);
+      ctx.fillRect(pos.x - cellW/2, pos.y - cellH/2, cellW, cellH);
+    }
+  }
+
+  // Time slice labels
+  if (state.mode === 'grid') {
+    ctx.fillStyle = 'rgba(74,122,144,0.7)';
+    ctx.font = '10px Share Tech Mono, monospace';
+    for (let t = 0; t < state.W; t++) {
+      const pos = gridPos({ t, p: 0 });
+      ctx.fillText('t-'+(state.W-1-t), pos.x - 10, 42);
+    }
+    ctx.fillStyle = 'rgba(74,122,144,0.7)';
+    for (let p = 0; p < state.P; p++) {
+      const pos = gridPos({ t: 0, p });
+      ctx.fillText('$'+(PRICE_LEVELS[p]||''), 4, pos.y+4);
+    }
+  }
+
+  // Edges
+  for (const e of graph.edges) {
+    if (e.type==='spatial' && !state.showSpatial) continue;
+    if (e.type==='temporal' && !state.showTemporal) continue;
+
+    const src = graph.nodes[e.src];
+    const dst = graph.nodes[e.dst];
+    const sp = getNodePos(src);
+    const dp = getNodePos(dst);
+
+    // Animated flow particles on temporal edges
+    if (state.showAnim && e.type==='temporal') {
+      const t = (state.animOffset % 1);
+      const px = sp.x + (dp.x - sp.x)*t;
+      const py = sp.y + (dp.y - sp.y)*t;
+      const grad = ctx.createRadialGradient(px,py,0,px,py,5);
+      grad.addColorStop(0,'rgba(57,255,20,0.9)');
+      grad.addColorStop(1,'rgba(57,255,20,0)');
+      ctx.beginPath(); ctx.arc(px,py,4,0,Math.PI*2);
+      ctx.fillStyle = grad; ctx.fill();
+    }
+
+    const alpha = 0.2 + e.strength * 0.5;
+    if (e.type==='spatial') {
+      ctx.strokeStyle = `rgba(0,212,255,${alpha})`;
+      ctx.lineWidth = 0.8 + e.strength;
+      ctx.setLineDash([]);
+    } else {
+      ctx.strokeStyle = `rgba(255,107,53,${alpha})`;
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([4,3]);
+    }
+    ctx.beginPath();
+    ctx.moveTo(sp.x, sp.y);
+    ctx.lineTo(dp.x, dp.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Nodes
+  for (const node of graph.nodes) {
+    const pos = getNodePos(node);
+    const r = nodeRadius(node);
+    const isHovered = state.hoveredNode === node.id;
+    const color = nodeColor(node);
+
+    // Glow
+    if (isHovered) {
+      const glow = ctx.createRadialGradient(pos.x,pos.y,0,pos.x,pos.y,r*3);
+      glow.addColorStop(0, color.replace('0.9','0.3'));
+      glow.addColorStop(1, 'transparent');
+      ctx.beginPath(); ctx.arc(pos.x,pos.y,r*3,0,Math.PI*2);
+      ctx.fillStyle = glow; ctx.fill();
+    }
+
+    // φ-scale outer ring
+    const phi = 0.2 + 0.6*Math.exp(-Math.pow(((node.t/state.W-0.5)*2+(node.p/state.P-0.5)*1.5),2)/state.D);
+    ctx.beginPath(); ctx.arc(pos.x, pos.y, r*1.5, 0, Math.PI*2);
+    ctx.strokeStyle = `rgba(57,255,20,${phi*0.25})`;
+    ctx.lineWidth = 1; ctx.stroke();
+
+    // Node
+    ctx.beginPath(); ctx.arc(pos.x, pos.y, r, 0, Math.PI*2);
+    const grad = ctx.createRadialGradient(pos.x-r*0.3,pos.y-r*0.3,0,pos.x,pos.y,r);
+    grad.addColorStop(0,'rgba(255,255,255,0.25)');
+    grad.addColorStop(1,color);
+    ctx.fillStyle = grad; ctx.fill();
+    ctx.strokeStyle = isHovered ? '#fff' : color;
+    ctx.lineWidth = isHovered ? 1.5 : 0.5;
+    ctx.stroke();
+
+    // Label
+    if (state.showLabels) {
+      ctx.fillStyle = 'rgba(224,244,255,0.8)';
+      ctx.font = `${Math.max(7,state.nodeSize-2)}px Share Tech Mono, monospace`;
+      ctx.fillText(`L${node.p}t${node.t}`, pos.x+r+2, pos.y+4);
+    }
+  }
+
+  ctx.restore();
+}
+
+// ─── Animation loop ───────────────────────────────────────────────────────────
+let lastTime = 0;
+function animate(ts) {
+  if (state.showAnim) {
+    const dt = (ts - lastTime) / 1000;
+    state.animOffset += dt * 0.4;
+  }
+  lastTime = ts;
+  draw();
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+// ─── Hover detection ──────────────────────────────────────────────────────────
+canvas.addEventListener('mousemove', e => {
+  if (state.dragging) {
+    state.pan.x = state.panStart.x + (e.clientX - state.dragStart.x);
+    state.pan.y = state.panStart.y + (e.clientY - state.dragStart.y);
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const world = screenToWorld(mx, my);
+
+  const graph = buildGraph();
+  let found = null, minD = Infinity;
+  for (const node of graph.nodes) {
+    const pos = getNodePos(node);
+    const d = Math.hypot(world.x - pos.x, world.y - pos.y);
+    if (d < 18 / state.zoom && d < minD) { minD = d; found = node; }
+  }
+
+  state.hoveredNode = found ? found.id : null;
+  document.getElementById('stHover').textContent = found
+    ? `Node(t=${found.t}, p=${found.p}) $${found.price} vol=${found.vol.toFixed(0)} imb=${found.imb.toFixed(3)}`
+    : '—';
+
+  if (found) {
+    const phi = 0.2 + 0.6*Math.exp(-Math.pow(((found.t/state.W-0.5)*2+(found.p/state.P-0.5)*1.5),2)/state.D);
+    const side = found.price < MID ? 'BID' : found.price > MID ? 'ASK' : 'MID';
+    document.getElementById('inspector').innerHTML = `
+      <div class="node-detail-row"><span>ID</span><span class="node-detail-val" style="color:var(--accent)">L${found.p}·T${found.t}</span></div>
+      <div class="node-detail-row"><span>Price</span><span class="node-detail-val">$${found.price}</span></div>
+      <div class="node-detail-row"><span>Side</span><span class="node-detail-val" style="color:${side==='BID'?'var(--node-bid)':'var(--node-ask)'}">${side}</span></div>
+      <div class="node-detail-row"><span>Volume</span><span class="node-detail-val">${found.vol.toFixed(1)}</span></div>
+      <div class="node-detail-row"><span>Imbalance</span><span class="node-detail-val">${found.imb.toFixed(4)}</span></div>
+      <div class="node-detail-row"><span>φ (liquidity)</span><span class="node-detail-val" style="color:var(--accent3)">${phi.toFixed(4)}</span></div>
+      <div class="node-detail-row"><span>∂φ/∂t ≈</span><span class="node-detail-val">${(phi*state.D*0.12).toFixed(5)}</span></div>
+    `;
+  } else {
+    document.getElementById('inspector').innerHTML = '<div class="inspector-hint">Hover over a node to inspect its features.</div>';
+  }
+});
+
+canvas.addEventListener('mousedown', e => {
+  state.dragging = true;
+  state.dragStart = { x: e.clientX, y: e.clientY };
+  state.panStart = { ...state.pan };
+});
+canvas.addEventListener('mouseup', () => state.dragging = false);
+canvas.addEventListener('mouseleave', () => state.dragging = false);
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY > 0 ? 0.9 : 1.1;
+  state.zoom = Math.max(0.2, Math.min(5, state.zoom * factor));
+}, { passive: false });
+
+// ─── Controls ────────────────────────────────────────────────────────────────
+function bindSlider(id, key, valId, decimals=0) {
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => {
+    state[key] = parseFloat(el.value);
+    document.getElementById(valId).textContent = state[key].toFixed(decimals);
+    updateStats();
+    if (key === 'D') drawPhiField();
+  });
+}
+bindSlider('wSlider','W','wVal'); bindSlider('pSlider','P','pVal');
+bindSlider('epsSlider','eps','epsVal',1); bindSlider('sizeSlider','nodeSize','sizeVal');
+bindSlider('dSlider','D','dVal',3);
+
+function bindToggle(id, key) {
+  const el = document.getElementById(id);
+  el.addEventListener('click', () => {
+    state[key] = !state[key];
+    el.classList.toggle('on', state[key]);
+  });
+}
+bindToggle('togSpatial','showSpatial'); bindToggle('togTemporal','showTemporal');
+bindToggle('togLabels','showLabels'); bindToggle('togHeat','showHeat');
+bindToggle('togAnim','showAnim'); bindToggle('togSplit','showSplit');
+
+function updateStats() {
+  const graph = buildGraph();
+  const N = graph.nodes.length;
+  const sp = graph.edges.filter(e=>e.type==='spatial').length;
+  const te = graph.edges.filter(e=>e.type==='temporal').length;
+  document.getElementById('statNodes').textContent = N;
+  document.getElementById('statSpatial').textContent = sp;
+  document.getElementById('statTemporal').textContent = te;
+  document.getElementById('statTotal').textContent = sp+te;
+  document.getElementById('statDeg').textContent = ((sp+te)*2/N).toFixed(2);
+  document.getElementById('statDens').textContent = (((sp+te)*2/(N*(N-1)))*100).toFixed(1)+'%';
+}
+updateStats();
+
+['btnGrid','btnForce','btnMatrix'].forEach(id => {
+  document.getElementById(id).addEventListener('click', () => {
+    ['btnGrid','btnForce','btnMatrix'].forEach(b=>document.getElementById(b).classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    state.mode = id.replace('btn','').toLowerCase();
+    document.getElementById('stMode').textContent = 'MODE: '+state.mode.toUpperCase();
+    if (state.mode === 'force') computeForceLayout();
+    state.pan = { x: 0, y: 0 }; state.zoom = 1;
+  });
+});
+</script>
+</body>
+</html>
